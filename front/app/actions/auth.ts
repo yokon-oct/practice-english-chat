@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/lib/supabase/server'
+import { redirect } from 'next/navigation'
 
 export type AuthState = {
   error?: string
@@ -45,4 +46,10 @@ export async function signUp(
   }
 
   return { success: true, email }
+}
+
+export async function signOut() {
+  const supabase = await createClient()
+  await supabase.auth.signOut()
+  redirect('/login')
 }
