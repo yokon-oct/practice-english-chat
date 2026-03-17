@@ -1,4 +1,8 @@
+import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import ChatView, { type Message } from './ChatView'
+
+const INITIAL_MESSAGE = 'こんにちは！今日はどんな英語を学びたいですか？'
 
 export default async function ChatPage() {
   const supabase = await createClient()
@@ -6,29 +10,99 @@ export default async function ChatPage() {
     data: { user },
   } = await supabase.auth.getUser()
 
-  return (
-    <div className="min-h-full flex items-center justify-center p-8">
-      <div className="text-center">
-        <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-          <svg
-            className="w-9 h-9 text-white"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={2}
-              d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
-            />
-          </svg>
-        </div>
-        <h1 className="text-2xl font-bold text-gray-900 mb-2">English Chat</h1>
-        <p className="text-gray-500 text-sm mb-1">ようこそ！</p>
-        <p className="text-gray-400 text-xs">{user?.email}</p>
-        <p className="text-gray-400 text-xs mt-6">チャット機能は近日実装予定です</p>
+  if (!user) redirect('/login')
+
+  // 直近のセッションを取得
+  const { data: latestSession } = await supabase
+    .from('chat_sessions')
+    .select('id')
+    .eq('user_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  let sessionId = latestSession?.id
+
+  // セッションがなければ新規作成（初回アクセス時）
+  if (!sessionId) {
+    const { data: newSession } = await supabase
+      .from('chat_sessions')
+      .insert({ user_id: user.id })
+      .select()
+      .single()
+
+    if (newSession) {
+      sessionId = newSession.id
+
+      // 初回 AI メッセージを挿入
+      await supabase.from('messages').insert({
+        session_id: sessionId,
+        role: 'assistant',
+        content: INITIAL_MESSAGE,
+      })
+    }
+  }
+
+  if (!sessionId) {
+    return (
+      <div className="flex items-center justify-center min-h-full p-8 text-center">
+        <p className="text-gray-500 text-sm">
+          セッションの作成に失敗しました。ページを再読み込みしてください。
+        </p>
       </div>
-    </div>
+    )
+  }
+
+  // メッセージと提案を取得
+  const { data: rawMessages } = await supabase
+    .from('messages')
+    .select(`
+      id,
+      role,
+      content,
+      created_at,
+      suggestion_messages (
+        id,
+        english_text,
+        japanese_translation,
+        display_order
+      )
+    `)
+    .eq('session_id', sessionId)
+    .order('created_at', { ascending: true })
+
+  // ブックマーク済みの提案 ID と bookmark.id のマッピングを取得
+  const { data: bookmarks } = await supabase
+    .from('bookmarks')
+    .select('id, suggestion_message_id')
+    .eq('user_id', user.id)
+
+  const bookmarkMap = new Map(
+    (bookmarks ?? []).map((b) => [b.suggestion_message_id, b.id])
   )
+
+  // Messages 型に変換
+  const messages: Message[] = (rawMessages ?? []).map((msg) => ({
+    id: msg.id,
+    role: msg.role as 'user' | 'assistant',
+    content: msg.content,
+    createdAt: msg.created_at,
+    suggestions: ((msg.suggestion_messages as {
+      id: string
+      english_text: string
+      japanese_translation: string
+      display_order: number
+    }[]) ?? [])
+      .sort((a, b) => a.display_order - b.display_order)
+      .map((s) => ({
+        id: s.id,
+        englishText: s.english_text,
+        japaneseTranslation: s.japanese_translation,
+        displayOrder: s.display_order,
+        isBookmarked: bookmarkMap.has(s.id),
+        bookmarkId: bookmarkMap.get(s.id) ?? null,
+      })),
+  }))
+
+  return <ChatView sessionId={sessionId} initialMessages={messages} />
 }
