@@ -5,6 +5,34 @@ import { google } from '@ai-sdk/google'
 import { createClient } from '@/lib/supabase/server'
 import { SYSTEM_PROMPT } from '@/lib/ai/prompts'
 
+const INITIAL_MESSAGE = 'こんにちは！今日はどんな英語を学びたいですか？'
+
+// ─── 新規チャットセッション作成（サイドバーのリセット用）─────────────────────
+
+export async function createNewChatSession(): Promise<{ sessionId: string } | null> {
+  const supabase = await createClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) return null
+
+  const { data: session } = await supabase
+    .from('chat_sessions')
+    .insert({ user_id: user.id })
+    .select()
+    .single()
+
+  if (!session) return null
+
+  await supabase.from('messages').insert({
+    session_id: session.id,
+    role: 'assistant',
+    content: INITIAL_MESSAGE,
+  })
+
+  return { sessionId: session.id }
+}
+
 type AiResponse = {
   message: string
   suggestions: { englishText: string; japaneseTranslation: string }[]

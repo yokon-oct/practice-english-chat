@@ -104,5 +104,5 @@ export default async function ChatPage() {
       })),
   }))
 
-  return <ChatView sessionId={sessionId} initialMessages={messages} />
+  return <ChatView key={sessionId} sessionId={sessionId} initialMessages={messages} />
 }
